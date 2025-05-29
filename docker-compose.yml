@@ -1,0 +1,76 @@
+version: '3.8'
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres
+    environment:
+      POSTGRES_DB: lab2
+      POSTGRES_USER: labuser
+      POSTGRES_PASSWORD: labpass
+    volumes:
+      - ./pg_init:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    networks:
+      - etl_network
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:23.5
+    container_name: clickhouse
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    networks:
+      - etl_network
+
+  clickhouse-init:
+    image: clickhouse/clickhouse-server:23.5
+    container_name: clickhouse-init
+    depends_on:
+      - clickhouse
+    networks:
+      - etl_network
+    volumes:
+      - ./ch_init.sql:/var/clickhouse/schema/init.sql:ro
+    entrypoint: /bin/sh
+    command: -c "
+      while ! clickhouse-client --host clickhouse -q 'SHOW DATABASES'; do 
+        echo 'Waiting for ClickHouse to start...'; sleep 1; 
+      done;
+      clickhouse-client --host clickhouse --queries-file /var/clickhouse/schema/init.sql;
+      tail -f /dev/null;
+      "
+
+  spark-master:
+    image: bitnami/spark:3.4.0
+    container_name: spark-master
+    environment:
+      - SPARK_MODE=master
+      - SPARK_MASTER_HOST=spark-master
+      - SPARK_MASTER_PORT=7077
+      - SPARK_LOG_LEVEL=INFO
+    ports:
+      - "7077:7077"
+      - "8080:8080"
+    volumes:
+      - ./spark_jobs:/scripts
+      - ./jars:/jars
+    networks:
+      - etl_network
+
+  spark-worker:
+    image: bitnami/spark:3.4.0
+    container_name: spark-worker
+    depends_on:
+      - spark-master
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_WORKER_MEMORY=1G
+      - SPARK_WORKER_CORES=1
+    networks:
+      - etl_network
+
+networks:
+  etl_network:
+    driver: bridge
